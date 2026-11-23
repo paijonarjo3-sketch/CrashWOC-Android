@@ -1,3 +1,4 @@
+
 name: CrashWOC Android Build
 
 on:
@@ -13,13 +14,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Prepare logs
-        run: |
-          mkdir -p logs build
-          touch logs/extract.log
-          touch logs/configure.log
-          touch logs/build.log
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -40,25 +34,25 @@ jobs:
           ZIP="CrashWOC-NuWorld-0.10.0-with-decomp.zip"
 
           if [ ! -f "$ZIP" ]; then
-            echo "ERROR: ZIP tidak ditemukan: $ZIP" | tee logs/extract.log
+            echo "ERROR: ZIP tidak ditemukan: $ZIP"
             exit 1
           fi
 
-          mkdir -p source
+          mkdir -p source logs artifacts
           unzip -q "$ZIP" -d source
 
           SRC="$(find source -maxdepth 5 -name CMakeLists.txt -print -quit)"
 
           if [ -z "$SRC" ]; then
-            echo "ERROR: CMakeLists.txt tidak ditemukan" | tee logs/extract.log
+            echo "ERROR: CMakeLists.txt tidak ditemukan"
             exit 1
           fi
 
           SRC="$(dirname "$SRC")"
           echo "SRC=$SRC" >> "$GITHUB_ENV"
 
-          echo "Source: $SRC" | tee logs/extract.log
-          find "$SRC" -maxdepth 2 -type f | head -100 >> logs/extract.log
+          echo "Source: $SRC"
+          find "$SRC" -maxdepth 2 -type f | head -100
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -84,7 +78,11 @@ jobs:
       - name: Install Linux build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build clang libclang-dev build-essential
+          sudo apt-get install -y \
+            ninja-build \
+            clang \
+            libclang-dev \
+            build-essential
 
       - name: Install Python requirements
         shell: bash
@@ -92,7 +90,7 @@ jobs:
           if [ -f "$SRC/tools/requirements.txt" ]; then
             python -m pip install -r "$SRC/tools/requirements.txt"
           else
-            echo "Python requirements tidak ditemukan; dilewati."
+            echo "No Python requirements found; skipping."
           fi
 
       - name: Configure Android build
@@ -102,6 +100,8 @@ jobs:
 
           cmake -S "$SRC" -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS_RELEASE="-O0 -DNDEBUG" \
+            -DCMAKE_CXX_FLAGS_RELEASE="-O0 -DNDEBUG" \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-29 \
@@ -115,15 +115,18 @@ jobs:
           cmake --build build --parallel 2 \
             2>&1 | tee logs/build.log
 
-      - name: Inspect generated files
+      - name: Collect generated files
         if: always()
         shell: bash
         run: |
-          echo "=== APK ==="
-          find . -type f -name "*.apk" -print || true
+          echo "=== APK files ==="
+          find . -type f -name "*.apk" -print
 
           echo "=== Native libraries ==="
           find build -type f -name "*.so" -print 2>/dev/null || true
+
+          find build -type f \( -name "*.apk" -o -name "*.so" -o -name "*.aab" \) \
+            -exec cp --parents {} artifacts/ \; 2>/dev/null || true
 
       - name: Upload build results
         if: always()
@@ -132,6 +135,6 @@ jobs:
           name: CrashWOC-Android-Results
           path: |
             logs/
-            build/
+            artifacts/
           if-no-files-found: warn
           retention-days: 7
