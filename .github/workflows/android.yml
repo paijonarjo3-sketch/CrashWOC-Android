@@ -21,16 +21,16 @@ jobs:
         run: |
           cat > android_patch.py <<'PYEOF'
           import pathlib, sys
-          
+
           p = pathlib.Path(sys.argv[1]) / "CMakeLists.txt"
           s = p.read_bytes().decode().replace("\r\n", "\n")
-          
+
           def sub(old, new):
               global s
               if old not in s:
                   sys.exit("patch gagal, tidak ketemu: " + old)
               s = s.replace(old, new, 1)
-          
+
           sub("project(crashwoc-nuworld VERSION 0.10.0 LANGUAGES C CXX)\n",
               "project(crashwoc-nuworld VERSION 0.10.0 LANGUAGES C CXX)\n"
               "\n# --- Android ---\n"
@@ -49,7 +49,15 @@ jobs:
           sub("add_dependencies(crashwoc-nuworld nuworld-updater)\n",
               "if(NOT ANDROID)\n  add_dependencies(crashwoc-nuworld nuworld-updater)\nendif()\n")
           p.write_text(s)
-          print("CMakeLists.txt dipatch untuk Android")
+
+          d = pathlib.Path(sys.argv[1]) / "cmake" / "decomp.cmake"
+          t = d.read_bytes().decode().replace("\r\n", "\n")
+          old = "  -Werror=return-type)\n"
+          if old not in t:
+              sys.exit("patch gagal, tidak ketemu di decomp.cmake: " + old)
+          t = t.replace(old, "  -Werror=return-type -Wno-format-security -Wno-error=format-security)\n", 1)
+          d.write_text(t)
+          print("CMakeLists.txt dan decomp.cmake dipatch untuk Android")
           PYEOF
           python3 android_patch.py "$SRC"
 
