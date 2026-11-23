@@ -1,4 +1,3 @@
-
 name: CrashWOC Android Build
 
 on:
@@ -15,6 +14,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Prepare logs
+        run: |
+          mkdir -p logs build
+          touch logs/extract.log
+          touch logs/configure.log
+          touch logs/build.log
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Extract source ZIP
         shell: bash
         run: |
@@ -23,34 +40,32 @@ jobs:
           ZIP="CrashWOC-NuWorld-0.10.0-with-decomp.zip"
 
           if [ ! -f "$ZIP" ]; then
-            echo "ERROR: Source ZIP tidak ditemukan: $ZIP"
+            echo "ERROR: ZIP tidak ditemukan: $ZIP" | tee logs/extract.log
             exit 1
           fi
 
           mkdir -p source
           unzip -q "$ZIP" -d source
 
-          SRC="$(find source -maxdepth 4 -name CMakeLists.txt -print -quit)"
+          SRC="$(find source -maxdepth 5 -name CMakeLists.txt -print -quit)"
 
           if [ -z "$SRC" ]; then
-            echo "ERROR: CMakeLists.txt tidak ditemukan"
+            echo "ERROR: CMakeLists.txt tidak ditemukan" | tee logs/extract.log
             exit 1
           fi
 
           SRC="$(dirname "$SRC")"
           echo "SRC=$SRC" >> "$GITHUB_ENV"
 
-          echo "Source directory: $SRC"
-          echo "=== Source files ==="
-          find "$SRC" -maxdepth 2 -type f | head -100
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+          echo "Source: $SRC" | tee logs/extract.log
+          find "$SRC" -maxdepth 2 -type f | head -100 >> logs/extract.log
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: "11076708"
+          accept-android-sdk-licenses: true
+          packages: ""
 
       - name: Install Android NDK and CMake
         shell: bash
@@ -59,22 +74,17 @@ jobs:
 
           sdkmanager \
             "platform-tools" \
-            "platforms;android-30" \
+            "platforms;android-29" \
             "ndk;27.2.12479018" \
             "cmake;3.31.6"
 
-          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
-          echo "$ANDROID_SDK_ROOT/cmake/3.31.6/bin" >> "$GITHUB_PATH"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/cmake/3.31.6/bin" >> "$GITHUB_PATH"
 
       - name: Install Linux build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            ninja-build \
-            clang \
-            libclang-dev \
-            build-essential \
-            unzip
+          sudo apt-get install -y ninja-build clang libclang-dev build-essential
 
       - name: Install Python requirements
         shell: bash
@@ -82,49 +92,46 @@ jobs:
           if [ -f "$SRC/tools/requirements.txt" ]; then
             python -m pip install -r "$SRC/tools/requirements.txt"
           else
-            echo "No tools/requirements.txt; skipping."
+            echo "Python requirements tidak ditemukan; dilewati."
           fi
 
       - name: Configure Android build
         shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
 
           cmake -S "$SRC" -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-30 \
-            2>&1 | tee configure.log
+            -DANDROID_PLATFORM=android-29 \
+            2>&1 | tee logs/configure.log
 
       - name: Compile
         shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
 
           cmake --build build --parallel 2 \
-            2>&1 | tee build.log
+            2>&1 | tee logs/build.log
 
-      - name: Check generated files
+      - name: Inspect generated files
         if: always()
         shell: bash
         run: |
-          echo "=== APK files ==="
+          echo "=== APK ==="
           find . -type f -name "*.apk" -print || true
 
           echo "=== Native libraries ==="
           find build -type f -name "*.so" -print 2>/dev/null || true
 
-      - name: Upload build results and logs
+      - name: Upload build results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: CrashWOC-Android-Build-Results
+          name: CrashWOC-Android-Results
           path: |
-            configure.log
-            build.log
-            build/**/*.so
-            build/**/*.apk
-            build/**/*.aab
+            logs/
+            build/
           if-no-files-found: warn
           retention-days: 7
