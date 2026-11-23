@@ -17,6 +17,42 @@ jobs:
           echo "SRC=$SRC" >> "$GITHUB_ENV"
           echo "Source di: $SRC"
 
+      - name: Patch CMake untuk Android
+        run: |
+          cat > android_patch.py <<'PYEOF'
+          import pathlib, sys
+          
+          p = pathlib.Path(sys.argv[1]) / "CMakeLists.txt"
+          s = p.read_bytes().decode().replace("\r\n", "\n")
+          
+          def sub(old, new):
+              global s
+              if old not in s:
+                  sys.exit("patch gagal, tidak ketemu: " + old)
+              s = s.replace(old, new, 1)
+          
+          sub("project(crashwoc-nuworld VERSION 0.10.0 LANGUAGES C CXX)\n",
+              "project(crashwoc-nuworld VERSION 0.10.0 LANGUAGES C CXX)\n"
+              "\n# --- Android ---\n"
+              "set(NW_UPD_EXCL \"\")\n"
+              "if(ANDROID)\n  set(NW_UPD_EXCL EXCLUDE_FROM_ALL)\nendif()\n"
+              "function(nw_add_main name)\n"
+              "  if(ANDROID)\n    add_library(${name} SHARED ${ARGN})\n"
+              "  else()\n    add_executable(${name} ${ARGN})\n  endif()\n"
+              "endfunction()\n# --- end Android ---\n")
+          sub("add_executable(crashwoc-nuworld\n", "nw_add_main(crashwoc-nuworld\n")
+          sub("set_target_properties(crashwoc-nuworld PROPERTIES OUTPUT_NAME NuWorld)\n",
+              "set_target_properties(crashwoc-nuworld PROPERTIES OUTPUT_NAME NuWorld)\n"
+              "if(ANDROID)\n  set_target_properties(crashwoc-nuworld PROPERTIES OUTPUT_NAME main)\nendif()\n")
+          sub("add_executable(nuworld-updater src/updater/main.cpp",
+              "add_executable(nuworld-updater ${NW_UPD_EXCL} src/updater/main.cpp")
+          sub("add_dependencies(crashwoc-nuworld nuworld-updater)\n",
+              "if(NOT ANDROID)\n  add_dependencies(crashwoc-nuworld nuworld-updater)\nendif()\n")
+          p.write_text(s)
+          print("CMakeLists.txt dipatch untuk Android")
+          PYEOF
+          python3 android_patch.py "$SRC"
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -35,12 +71,19 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-29 \
+            -DNUWORLD_TESTS=OFF \
             2>&1 | tee configure.log
 
-      - name: Build
+      - name: Build libmain.so
         run: |
           set -o pipefail
-          cmake --build build 2>&1 | tee build.log
+          cmake --build build --target crashwoc-nuworld -- -k 0 2>&1 | tee build.log
+
+      - name: Ringkasan error
+        if: always()
+        run: |
+          grep -E "error:|undefined symbol" build.log | sort | uniq -c | sort -rn | head -60 > errors.log || true
+          cat errors.log
 
       - name: Upload logs
         if: always()
@@ -50,5 +93,6 @@ jobs:
           path: |
             configure.log
             build.log
-          if-no-files-found: warn
-          
+            errors.log
+            build/libmain.so
+          if-no-files-found: ignore
